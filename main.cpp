@@ -9,13 +9,19 @@ const int height = 800;
 const int depth=255;
 const Vec3f eye=Vec3f(0,0,1.8);
 const Vec3f center=Vec3f(0,0,0);
-const Vec3f light=Vec3f(0,0,10);
+const Vec3f light=Vec3f(0,5,-5000);
 const Vec3f look_dir=Vec3f(0,0,-1).normalize();
 const Vec3f top=Vec3f(0,1,0).normalize();
 const TGAColor white = TGAColor(255, 255, 255, 255);
 const TGAColor red   = TGAColor(255, 0,   0,   255);
 const TGAColor green = TGAColor(0,255,0,255);
 const TGAColor blue =TGAColor(0,0,255,255);
+const bool perspective=false;
+const bool text=false;
+const bool nm_tangent_normal=true;
+const bool shadow=false;
+const bool assign_light_dir=false;
+const Vec3f assigned_light_dir=Vec3f(0,0,-1);
 Model *model = NULL;
 Matrix ModelView=Matrix::identity();
 void line(int x0, int y0, int x1, int y1, TGAImage &image, TGAColor color) {
@@ -153,9 +159,11 @@ Vec3f world2screen_simple(Vec3f world_cord){
 
 Vec3f world2screen(Vec3f v) {
     Vec3f result;
+    Matrix projection=Matrix::identity();
     static Matrix ViewPort=viewport(0,0,width,height);
      static Matrix mvp=lookat(eye,center,look_dir,top);
     result =m2v(mvp*v2m(v));
+    if(perspective)
     result =p2o(result);
     result=m2v(ViewPort*v2m(result));
   //  result=p2o(result);
@@ -165,7 +173,6 @@ Vec3f world2screen(Vec3f v) {
 
 Vec3f TBN(Vec3f *pts,Vec2f *cords,Vec3f normal,TGAColor nm_tangent){
     Vec3f nm_tangent2=Vec3f(nm_tangent[2]*2.f/255.f-1,nm_tangent[1]*2.f/255.f-1,nm_tangent[0]*2.f/255.f-1).normalize();
-
     Vec3f deltaPos1=pts[1]-pts[0];
     Vec3f deltaPos2=pts[2]-pts[0];
     Vec3f deltaUV1=Vec3f(cords[1].x-cords[0].x,cords[1].y-cords[0].y,0);
@@ -190,8 +197,7 @@ Vec3f TBN(Vec3f *pts,Vec2f *cords,Vec3f normal,TGAColor nm_tangent){
             result2[i]+=nm_tangent2[j]*result[i][j];
         }
     }
-   // showVector(nm_tangent2,"nm_tangent");
-  //  showVector(result2,"result2");
+
     return result2;
 }
 
@@ -223,8 +229,24 @@ void triangle(Vec3f *pts,float *zbuffer,TGAImage &image,TGAColor color){
     
 }
 
-
-void triangle_texture(Vec3f *pts,Vec2f *texture_cord,Vec3f *normal_cord,float *zbuffer,TGAImage &image,TGAImage &texture,TGAImage &nm,TGAImage nm_tangent,Vec3f light){
+void triangle_texture(int i,TGAImage &image,TGAImage &texture,TGAImage &nm_tangent,float *zbuffer){ 
+//get essential information
+        std::vector<int> face=model->face(i);
+        std::vector<int> texture_count=model->texture(i);
+        std::vector<int> norm_count=model->norm(i);
+        Vec3f screen_cord[3];
+        Vec3f world_cord[3];
+        Vec2f texture_cord[3];
+        Vec3f norm_cord[3];
+        for(int j=0;j<3;j++){
+            world_cord[j]=model->vert(face[j]);
+            screen_cord[j]=world2screen(world_cord[j]);
+           // screen_cord[j]=world2screen_simple(world_cord[j]);
+            texture_cord[j]=model->text(texture_count[j]);
+            norm_cord[j]=model->normal(norm_count[j]);
+        }
+    Vec3f *pts=screen_cord;
+    Vec3f *normal_cord=norm_cord;
     Vec2f bboxmin(std::numeric_limits<int>::max(),std::numeric_limits<int>::max());
     Vec2f bboxmax(-std::numeric_limits<int>::max(),-std::numeric_limits<int>::max());
     Vec2f clamp(image.get_width()-1,image.get_height()-1);
@@ -234,52 +256,56 @@ void triangle_texture(Vec3f *pts,Vec2f *texture_cord,Vec3f *normal_cord,float *z
             bboxmin[j]=std::max(0.0f,std::min(bboxmin[j],pts[i][j]));
         }
     }
+
+
     Vec3f p;
-
-
     for(p.x=bboxmin[0];p.x<bboxmax[0];p.x++){
         for(p.y=bboxmin[1];p.y<bboxmax[1];p.y++){
-            Vec3f bc_cord=barycentric(pts[0],pts[1],pts[2],p);
+            Vec3f bc_cord=barycentric(pts[0],pts[1],pts[2],p);//it is not correct!
             if(bc_cord.x<0||bc_cord.y<0||bc_cord.z<0)continue;
             p.z=0;
-            int world_x,world_y,world_z;
+            float world_x=0,world_y=0,world_z=0;
             int x=0,y=0;
             int nm_x=0,nm_y=0;
             TGAColor color;
-            Vec3f normal;
+            Vec3f normal=Vec3f(0,0,0);
             for(int i=0;i<3;i++){
                 p.z+=pts[i][2]*bc_cord[i];
             }
-            if(p.z>zbuffer[int(p.x+p.y*width)]){
+            if(p.z<zbuffer[int(p.x+p.y*width)])continue;
                 for(int i=0;i<3;i++){
                     x+=int((texture_cord[i][0])*bc_cord[i]*texture.get_width());
                     y+=int((texture_cord[i][1])*bc_cord[i]*texture.get_height());
-                    world_x+=pts[i][0]*bc_cord[i];
-                    world_y+=pts[i][1]*bc_cord[i];
-                    world_z+=pts[i][2]*bc_cord[i];
+                    world_x+=world_cord[i][0]*bc_cord[i];
+                    world_y+=world_cord[i][1]*bc_cord[i];
+                    world_z+=world_cord[i][2]*bc_cord[i];
                     nm_x+=int((texture_cord[i][0])*bc_cord[i]*nm_tangent.get_width());
                     nm_y+=int((texture_cord[i][1])*bc_cord[i]*nm_tangent.get_height());
                     normal=normal+normal_cord[i]*bc_cord[i];
                 }
             normal.normalize();
-            normal=TBN(pts,texture_cord,normal,nm_tangent.get(x,y));
-           // Vec3f light_dir=light-Vec3f(world_x,world_y,world_z);
-            Vec3f light_dir=Vec3f(0,0,-1);
-            light_dir.normalize();
+            if(nm_tangent_normal)
+            normal=TBN(world_cord,texture_cord,normal,nm_tangent.get(x,y));
+            
+            Vec3f light_dir=assign_light_dir?assigned_light_dir:light-Vec3f(world_x,world_y,world_z);
             showVector(light_dir,"light_dir");
+            light_dir.normalize();
+
             float intensity=normal*light_dir;
             intensity=intensity<0?-intensity:0;
             std::cout<<intensity<<std::endl;
-            color=texture.get(x,y);//TGAColor(255,255,255,255);//
+            color=text?texture.get(x,y):TGAColor(255,255,255,255);//TGAColor(255,255,255,255);//
             color=TGAColor(color[2]*intensity,color[1]*intensity,color[0]*intensity,255);
                 zbuffer[int(p.x+p.y*width)]=p.z;
                 image.set(p.x,p.y,color);
-            }
+            
         }
     }
-}
 
-void triangle_line(Vec2i vet0,Vec2i vet1,Vec2i vet2,TGAImage &image,TGAColor color){
+        
+}
+   
+void triangle_line(Vec2i vet0,Vec2i vet1,Vec2i vet2,TGAImage &image,TGAColor color){ 
     if(vet0.y>vet1.y)std::swap(vet0,vet1);
     if(vet1.y>vet2.y)std::swap(vet1,vet2);
     if(vet0.y>vet1.y)std::swap(vet0,vet1);
@@ -287,8 +313,8 @@ void triangle_line(Vec2i vet0,Vec2i vet1,Vec2i vet2,TGAImage &image,TGAColor col
     line(vet0,vet1,image,color);
     line(vet1,vet2,image,color);
     line(vet2,vet0,image,color);
-
 }
+
 
 void rasterize(Vec2i vec0,Vec2i vec1,TGAImage &image,TGAColor color,int y_buffer[] ){
     if(vec0.x>vec1.x)std::swap(vec0,vec1);
@@ -326,26 +352,9 @@ int main(int argc, char** argv) {
         zbuffer[i]=-std::numeric_limits<int>::max();
     }
     model=new Model("obj/african_head/african_head.obj");
-
     for(int i=0;i<model->nfaces();i++){
-        std::vector<int> face=model->face(i);
-        std::vector<int> texture_count=model->texture(i);
-        std::vector<int> norm_count=model->norm(i);
-        Vec3f screen_cord[3];
-        Vec3f world_cord[3];
-        Vec2f texture_cord[3];
-        Vec3f norm_cord[3];
-        for(int j=0;j<3;j++){
-            world_cord[j]=model->vert(face[j]);
-            screen_cord[j]=world2screen(world_cord[j]);
-           // screen_cord[j]=world2screen_simple(world_cord[j]);
-            texture_cord[j]=model->text(texture_count[j]);
-            norm_cord[j]=model->normal(norm_count[j]);
+        triangle_texture(i,image,texture,nm_tangant,zbuffer);
         }
-       // triangle(screen_cord,zbuffer,image,getColor_simple(world_cord,Vec3f(0,0,-1),white));
-      triangle_texture(screen_cord,texture_cord,norm_cord,zbuffer,image,texture,nm,nm_tangant,light);
-    }
-    
     image.flip_vertically();// i want to have the origin at the left bottom corner of the image
     image.write_tga_file("output.tga");
     delete model;

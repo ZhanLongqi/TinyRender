@@ -7,11 +7,11 @@
 const int width  = 800;
 const int height = 800;
 const int depth=255;
-const Vec3f eye=Vec3f(0,0,3);
+const Vec3f eye=Vec3f(0,0,1.8);
 const Vec3f center=Vec3f(0,0,0);
-const Vec3f light_dir=Vec3f(0,0,-1);
-const Vec3f look_dir=center-eye;
-const Vec3f top=Vec3f(0,1,0);
+const Vec3f light=Vec3f(0,0,10);
+const Vec3f look_dir=Vec3f(0,0,-1).normalize();
+const Vec3f top=Vec3f(0,1,0).normalize();
 const TGAColor white = TGAColor(255, 255, 255, 255);
 const TGAColor red   = TGAColor(255, 0,   0,   255);
 const TGAColor green = TGAColor(0,255,0,255);
@@ -56,9 +56,6 @@ void line(Vec2i v0,Vec2i v1,TGAImage &image,TGAColor color){
     line(x0,y0,x1,y1,image,color); 
 }
 
-Vec2i project_normal(Vec3i vet){
-    return Vec2i(vet.x,vet.y);
-}
 
 Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec3f P) {
     Vec3f s[2];
@@ -72,18 +69,23 @@ Vec3f barycentric(Vec3f A, Vec3f B, Vec3f C, Vec3f P) {
         return Vec3f(1.f-(u.x+u.y)/u.z, u.y/u.z, u.x/u.z);
     return Vec3f(-1,1,1); // in this case generate negative coordinates, it will be thrown away by the rasterizator
 }
-Matrix lookat(Vec3f eye,Vec3f center,Vec3f g,Vec3f t){
-    Matrix m1=Matrix::identity();
-    Vec3f gt=cross(g,t).normalize();
-    for(int i=0;i<3;i++){
-        m1[0][i]=gt[i];
-        m1[1][i]=t[i];
-        m1[2][i]=-g[i];
-        m1[3][i]=center[i]-eye[i];
-    }
-    return m1;
-}
 
+void  showMatrix(Matrix m,char*name){
+    std::cout<<name<<std::endl;
+    for(int i=0;i<4;i++){
+        for(int j=0;j<4;j++){
+            std::cout<<m[i][j]<<"  ";
+        }
+        std::cout<<std::endl;
+    }
+}
+void showVector(Vec3f v,char* name){
+    std::cout<<name<<std::endl;
+    for(int i=0;i<3;i++){
+        std::cout<<v[i]<<" ";
+    }
+    std::cout<<std::endl;
+}
 Matrix viewport(int x,int y,int w,int h){
     Matrix m=Matrix::identity();
     m[0][3]=x+w/2.f;
@@ -93,33 +95,104 @@ Matrix viewport(int x,int y,int w,int h){
     m[0][0]=w/2.f;
     m[1][1]=h/2.f;
     m[2][2]=depth/2.f;
+    m[3][3]=1;
+   // showMatrix(m,"viewport");
     return m;
 }
 Matrix v2m(Vec3f v){
     mat<4,4,float> m;
     m[0][0]=v.x;
-    m[0][1]=v.y;
-    m[0][2]=v.z;
-    m[0][3]=1.f;
+    m[1][0]=v.y;
+    m[2][0]=v.z;
+    m[3][0]=1.f;
     return m;
 }
 
 Vec3f m2v(Matrix m){
-    return Vec3f(m[0][0],m[0][1],m[0][2]);
+    return Vec3f(m[0][0]/m[3][0],m[1][0]/m[3][0],m[2][0]/m[3][0]);
+}
+
+Matrix lookat(Vec3f eye,Vec3f center,Vec3f g,Vec3f t){
+    Matrix m1=Matrix::identity();
+    Vec3f gt=cross(g,t).normalize();
+    for(int i=0;i<3;i++){
+        m1[0][i]=gt[i];
+        m1[1][i]=t[i];
+        m1[2][i]=-g[i];
+    }
+    m1[3][3]=1;
+
+    
+    Matrix m2=Matrix::identity();
+    m1[3][3]=1;
+    for(int i=0;i<3;i++){
+        m2[i][i]=1;
+        m2[i][3]=-1*eye[i];
+    }
+
+   
+    return m1*m2;
+}
+
+Vec3f p2o(Vec3f cords){
+ Matrix m3=Matrix::identity();
+    float near=-1;
+    float far=cords[2];
+    m3[0][0]=near;
+    m3[1][1]=near;
+    m3[2][2]=near+far;
+    m3[2][3]=-near*far;
+    m3[3][2]=1;
+    m3[3][3]=0;
+    return m2v(m3*v2m(cords));
+}
+
+Vec3f world2screen_simple(Vec3f world_cord){
+    return Vec3f(int((world_cord[0]+1)*width/2),int((world_cord[1]+1)*height/2),world_cord[2]);
 }
 
 Vec3f world2screen(Vec3f v) {
-    std::cout<<"flag"<<std::endl;
+    Vec3f result;
     static Matrix ViewPort=viewport(0,0,width,height);
-    static Matrix mvp=lookat(eye,Vec3f(0,0,0),look_dir,top);
-    static Matrix projection=ViewPort*mvp;
-    for(int i=0;i<4;i++){
-        for(int j=0;j<4;j++){
-            std::cout<<projection[i][j]<<" ";
-        }
-        std::cout<<""<<std::endl;
+     static Matrix mvp=lookat(eye,center,look_dir,top);
+    result =m2v(mvp*v2m(v));
+    result =p2o(result);
+    result=m2v(ViewPort*v2m(result));
+  //  result=p2o(result);
+    return Vec3f((int)result[0],(int)result[1],result[2]);
+}
+
+
+Vec3f TBN(Vec3f *pts,Vec2f *cords,Vec3f normal,TGAColor nm_tangent){
+    Vec3f nm_tangent2=Vec3f(nm_tangent[2]*2.f/255.f-1,nm_tangent[1]*2.f/255.f-1,nm_tangent[0]*2.f/255.f-1).normalize();
+
+    Vec3f deltaPos1=pts[1]-pts[0];
+    Vec3f deltaPos2=pts[2]-pts[0];
+    Vec3f deltaUV1=Vec3f(cords[1].x-cords[0].x,cords[1].y-cords[0].y,0);
+    Vec3f deltaUV2=Vec3f(cords[2].x-cords[0].x,cords[2].y-cords[0].y,0);
+
+    mat<3,3,float> result;
+
+    float r=1.f/(deltaUV1.x*deltaUV2.y-deltaUV1.y*deltaUV2.x);
+    Vec3f tangent=(deltaPos1*deltaUV2.y-deltaPos2*deltaUV1.y)*r;
+    Vec3f bitangent=(deltaPos2*deltaUV1.x-deltaPos1*deltaUV2.x)*r;
+
+    for(int i=0;i<3;i++){
+        result[0][i]=tangent[i];
+        result[1][i]=bitangent[i];
+        result[2][i]=normal[i];
+       // std::cout<<result[0][i]<<" "<<result[1][i]<<" "<<result[2][i]<<std::endl;
     }
-    return m2v(projection*v2m(v));
+    static int count;
+    Vec3f result2=Vec3f(0,0,0);
+    for(int i=0;i<3;i++){
+        for(int j=0;j<3;j++){
+            result2[i]+=nm_tangent2[j]*result[i][j];
+        }
+    }
+   // showVector(nm_tangent2,"nm_tangent");
+  //  showVector(result2,"result2");
+    return result2;
 }
 
 void triangle(Vec3f *pts,float *zbuffer,TGAImage &image,TGAColor color){
@@ -151,11 +224,7 @@ void triangle(Vec3f *pts,float *zbuffer,TGAImage &image,TGAColor color){
 }
 
 
-
-
-
-
-void triangle_texture(Vec3f *pts,Vec2f *texture_cord,Vec3f *normal_cord,float *zbuffer,TGAImage &image,TGAImage &texture,Vec3f light_dir){
+void triangle_texture(Vec3f *pts,Vec2f *texture_cord,Vec3f *normal_cord,float *zbuffer,TGAImage &image,TGAImage &texture,TGAImage &nm,TGAImage nm_tangent,Vec3f light){
     Vec2f bboxmin(std::numeric_limits<int>::max(),std::numeric_limits<int>::max());
     Vec2f bboxmax(-std::numeric_limits<int>::max(),-std::numeric_limits<int>::max());
     Vec2f clamp(image.get_width()-1,image.get_height()-1);
@@ -173,30 +242,37 @@ void triangle_texture(Vec3f *pts,Vec2f *texture_cord,Vec3f *normal_cord,float *z
             Vec3f bc_cord=barycentric(pts[0],pts[1],pts[2],p);
             if(bc_cord.x<0||bc_cord.y<0||bc_cord.z<0)continue;
             p.z=0;
+            int world_x,world_y,world_z;
             int x=0,y=0;
+            int nm_x=0,nm_y=0;
             TGAColor color;
             Vec3f normal;
             for(int i=0;i<3;i++){
                 p.z+=pts[i][2]*bc_cord[i];
             }
-
-         //   color=TGAColor(255*intensity,255*intensity,255*intensity,255);
-           // std::cout<<x<<" "<<y<<std::endl;
-           // std::cout<<p.y<<" "<<p.x<<std::endl;
             if(p.z>zbuffer[int(p.x+p.y*width)]){
                 for(int i=0;i<3;i++){
                     x+=int((texture_cord[i][0])*bc_cord[i]*texture.get_width());
                     y+=int((texture_cord[i][1])*bc_cord[i]*texture.get_height());
+                    world_x+=pts[i][0]*bc_cord[i];
+                    world_y+=pts[i][1]*bc_cord[i];
+                    world_z+=pts[i][2]*bc_cord[i];
+                    nm_x+=int((texture_cord[i][0])*bc_cord[i]*nm_tangent.get_width());
+                    nm_y+=int((texture_cord[i][1])*bc_cord[i]*nm_tangent.get_height());
                     normal=normal+normal_cord[i]*bc_cord[i];
                 }
             normal.normalize();
+            normal=TBN(pts,texture_cord,normal,nm_tangent.get(x,y));
+           // Vec3f light_dir=light-Vec3f(world_x,world_y,world_z);
+            Vec3f light_dir=Vec3f(0,0,-1);
+            light_dir.normalize();
+            showVector(light_dir,"light_dir");
             float intensity=normal*light_dir;
-            intensity*=-1;
-            //<<intensity<<std::endl;
-            color=texture.get(x,y);//TGAColor(255*intensity,255*intensity,255*intensity,255);//
-            //color=TGAColor(color[0]*intensity,color[1]*intensity,color[2]*intensity,255);
+            intensity=intensity<0?-intensity:0;
+            std::cout<<intensity<<std::endl;
+            color=texture.get(x,y);//TGAColor(255,255,255,255);//
+            color=TGAColor(color[2]*intensity,color[1]*intensity,color[0]*intensity,255);
                 zbuffer[int(p.x+p.y*width)]=p.z;
-                if(intensity>0)
                 image.set(p.x,p.y,color);
             }
         }
@@ -231,28 +307,25 @@ void rasterize(Vec2i vec0,Vec2i vec1,TGAImage &image,TGAColor color,int y_buffer
         }
     }
 }
-/*
-TGAColor getColor_simple(Vec3f* triangle,Vec3f light_dir,TGAColor color){
-    Vec3f normal=cross((triangle[2]-triangle[0]),(triangle[1]-triangle[0]));
-    normal.normalize();
-    float times=normal*light_dir;
-    if(times>0)
-    return TGAColor(color[0]*times,color[1]*times,color[2]*times,255);
-    return TGAColor(0,0,0,255);
-}
-*/
+
+
 
 int main(int argc, char** argv) {
     TGAImage image(width, height, TGAImage::RGB);
     TGAImage texture;
+    TGAImage nm;
+    TGAImage nm_tangant;
+    nm.read_tga_file("obj/african_head/african_head_nn.tga");
     texture.read_tga_file("obj/african_head/african_head_diffuse.tga");
+    nm_tangant.read_tga_file("obj/african_head/african_head_nm_tangent.tga");
+    nm.flip_vertically();
+    nm_tangant.flip_vertically();
     texture.flip_vertically();
     float *zbuffer=new float[height*width];
     for(int i=0;i<height*width;i++){
         zbuffer[i]=-std::numeric_limits<int>::max();
     }
     model=new Model("obj/african_head/african_head.obj");
-    model=new Model("obj/african_head/african_head_eye_outer.obj");
 
     for(int i=0;i<model->nfaces();i++){
         std::vector<int> face=model->face(i);
@@ -264,13 +337,13 @@ int main(int argc, char** argv) {
         Vec3f norm_cord[3];
         for(int j=0;j<3;j++){
             world_cord[j]=model->vert(face[j]);
-            //screen_cord[j]=world2screen(world_cord[j]);
-            screen_cord[j]=world_cord[j]*(i==0?width:height);
+            screen_cord[j]=world2screen(world_cord[j]);
+           // screen_cord[j]=world2screen_simple(world_cord[j]);
             texture_cord[j]=model->text(texture_count[j]);
             norm_cord[j]=model->normal(norm_count[j]);
         }
        // triangle(screen_cord,zbuffer,image,getColor_simple(world_cord,Vec3f(0,0,-1),white));
-      triangle_texture(screen_cord,texture_cord,norm_cord,zbuffer,image,texture,Vec3f(0,0,-1));
+      triangle_texture(screen_cord,texture_cord,norm_cord,zbuffer,image,texture,nm,nm_tangant,light);
     }
     
     image.flip_vertically();// i want to have the origin at the left bottom corner of the image
